@@ -423,6 +423,45 @@ def generate_summary_from_meta_and_h2(metadescription, html_content, max_h2=3):
 
     return build_acf_block("summary", acf_data)
 
+
+def load_summaries_csv(path):
+    """Charge un CSV de summaries pré-rédigés (slug,bullet1..bulletN) en dict slug -> [items]."""
+    if not path or not os.path.exists(path):
+        return {}
+    out = {}
+    with open(path, 'r', encoding='utf-8', newline='') as f:
+        reader = csv.DictReader(f)
+        bullet_keys = [k for k in (reader.fieldnames or []) if k.startswith('bullet')]
+        for row in reader:
+            slug = (row.get('slug') or '').strip()
+            if not slug:
+                continue
+            items = []
+            for k in bullet_keys:
+                v = (row.get(k) or '').strip()
+                if v:
+                    items.append(v)
+            if items:
+                out[slug] = items
+    return out
+
+
+def summary_from_items(items, title="En résumé :"):
+    """Construit un bloc ACF summary à partir d'une liste d'items déjà rédigés."""
+    if not items:
+        return None
+    acf_data = {
+        "title": title,
+        "_title": ACF_MAP['summary']['title'],
+        "summary": len(items),
+        "_summary": ACF_MAP['summary']['count']
+    }
+    for i, item in enumerate(items):
+        acf_data[f"summary_{i}_item"] = item
+        acf_data[f"_summary_{i}_item"] = ACF_MAP['summary']['items']
+    return build_acf_block("summary", acf_data)
+
+
 def div_summary_to_acf(div_tag):
     """Convertit une <div class="summary"> avec liste en bloc ACF summary"""
     title_tag = div_tag.find(['h4', 'h3', 'h2', 'strong', 'b'])
@@ -1245,7 +1284,7 @@ def write_posts_csv_chunked(posts, output_csv_path, chunk_size=30000, max_parts=
     print(f"[INFO] CSV (chunked for Excel): écrit {output_csv_path} (chunk_size={chunk_size}, max_parts={max_parts}, oversized_rows={oversized}).")
 
 
-def process_csv(csv_path, output_json_path, categories=None, tags=None, output_csv_path=None, output_csv_full_path=None, output_csv_chunked_path=None):
+def process_csv(csv_path, output_json_path, categories=None, tags=None, output_csv_path=None, output_csv_full_path=None, output_csv_chunked_path=None, summaries_csv=None):
     """Pipeline principal : CSV → JSON WordPress
 
     Args:
@@ -1254,6 +1293,10 @@ def process_csv(csv_path, output_json_path, categories=None, tags=None, output_c
         categories: Liste d'IDs de catégories par défaut (optionnel)
         tags: Liste d'IDs de tags par défaut (optionnel)
     """
+    summaries_by_slug = load_summaries_csv(summaries_csv) if summaries_csv else {}
+    if summaries_csv:
+        print(f"[INFO] Loaded {len(summaries_by_slug)} pre-written summaries from {summaries_csv}")
+
     with open(csv_path, 'r', encoding='utf-8', newline='') as f:
         # Utilise le dialecte CSV standard (comma, quote=") pour fiabilité
         # sur contenus multiline correctement quotés
@@ -1315,10 +1358,14 @@ def process_csv(csv_path, output_json_path, categories=None, tags=None, output_c
                 print(f"[WARN] Parser produced empty content; preserving raw HTML (len={len(html_content)}).")
                 gutenberg_content = f'<!-- wp:html -->\n{html_content}\n<!-- /wp:html -->'
 
-            # Génère le bloc summary depuis keypoints et l'insère au début.
-            # Fallback: si pas de keypoints, on construit un summary depuis
-            # metadescription + premiers H2 du contenu source.
-            summary_block = keypoints_to_summary_acf(keypoints_html)
+            # Génère le bloc summary. Priorité:
+            # 1) summaries pré-rédigés (CSV externe), 2) keypoints HTML,
+            # 3) fallback metadescription + premiers H2.
+            summary_block = None
+            if slug and slug in summaries_by_slug:
+                summary_block = summary_from_items(summaries_by_slug[slug])
+            if not summary_block:
+                summary_block = keypoints_to_summary_acf(keypoints_html)
             if not summary_block:
                 summary_block = generate_summary_from_meta_and_h2(seo_desc, html_content)
             if summary_block:
@@ -1449,6 +1496,7 @@ if __name__ == "__main__":
     parser.add_argument("--tags", nargs="*", type=int, default=[], help="IDs de tags WordPress")
     parser.add_argument("--test", action="store_true", help="Mode test (parsing HTML de démo)")
     parser.add_argument("--validate", action="store_true", help="Valider les colonnes du CSV sans convertir")
+    parser.add_argument("--summaries", help="CSV de summaries pré-rédigés (slug,bullet1,bullet2,...)")
 
     args = parser.parse_args()
 
@@ -1479,6 +1527,7 @@ if __name__ == "__main__":
         output_csv_path=args.csv_out,
         output_csv_full_path=args.csv_full,
         output_csv_chunked_path=None,
+        summaries_csv=args.summaries,
     )
 
     print(f"\nPrêt pour l'import WordPress !")

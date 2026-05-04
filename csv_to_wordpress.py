@@ -390,6 +390,39 @@ def keypoints_to_summary_acf(keypoints_html):
 
     return build_acf_block("summary", acf_data)
 
+def generate_summary_from_meta_and_h2(metadescription, html_content, max_h2=3):
+    """Fallback summary: bullet 1 = metadescription, bullets 2..N = premiers H2.
+
+    Utilisé quand la colonne `keypoints` est absente et qu'aucune <div class="summary">
+    n'existe dans le HTML. Renvoie None si moins de 2 items exploitables.
+    """
+    items = []
+    if metadescription and str(metadescription).strip():
+        items.append(str(metadescription).strip())
+
+    if html_content:
+        soup = BeautifulSoup(html_content, 'html.parser')
+        for h2 in soup.find_all('h2')[:max_h2]:
+            text = h2.get_text(strip=True)
+            if text:
+                items.append(text)
+
+    if len(items) < 2:
+        return None
+
+    acf_data = {
+        "title": "En résumé :",
+        "_title": ACF_MAP['summary']['title'],
+        "summary": len(items),
+        "_summary": ACF_MAP['summary']['count']
+    }
+
+    for i, item in enumerate(items):
+        acf_data[f"summary_{i}_item"] = item
+        acf_data[f"_summary_{i}_item"] = ACF_MAP['summary']['items']
+
+    return build_acf_block("summary", acf_data)
+
 def div_summary_to_acf(div_tag):
     """Convertit une <div class="summary"> avec liste en bloc ACF summary"""
     title_tag = div_tag.find(['h4', 'h3', 'h2', 'strong', 'b'])
@@ -1282,8 +1315,12 @@ def process_csv(csv_path, output_json_path, categories=None, tags=None, output_c
                 print(f"[WARN] Parser produced empty content; preserving raw HTML (len={len(html_content)}).")
                 gutenberg_content = f'<!-- wp:html -->\n{html_content}\n<!-- /wp:html -->'
 
-            # Génère le bloc summary depuis keypoints et l'insère au début
+            # Génère le bloc summary depuis keypoints et l'insère au début.
+            # Fallback: si pas de keypoints, on construit un summary depuis
+            # metadescription + premiers H2 du contenu source.
             summary_block = keypoints_to_summary_acf(keypoints_html)
+            if not summary_block:
+                summary_block = generate_summary_from_meta_and_h2(seo_desc, html_content)
             if summary_block:
                 gutenberg_content = summary_block + '\n\n' + gutenberg_content
 
